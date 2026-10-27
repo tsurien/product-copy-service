@@ -24,3 +24,9 @@ def test_banned_word_detected():
     text = GOOD_TEXT.replace("가벼워서", "혁신적으로 가벼워서")
     violations = check_rules(text, PRODUCT)
     assert any("R4" in v for v in violations)
+
+
+def test_missing_product_name_detected():
+    text = GOOD_TEXT.replace(PRODUCT["name"], "이 제품")
+    violations = check_rules(text, PRODUCT)
+    assert any("R2 제품명 누락" in v for v in violations)
