@@ -1,9 +1,12 @@
-name: CI
+name: CI-CD
 
 on:
   push:
     branches: [main]
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -29,3 +32,55 @@ jobs:
 
       - name: Docker 이미지 빌드
         run: docker build -t product-copy-service:${{ github.sha }} .
+
+  deploy:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: product-copy-service-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: AWS 자격 증명 설정
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-2
+
+      - name: ECR 로그인
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: 이미지 빌드 및 ECR 업로드
+        env:
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          IMAGE="${ECR_REGISTRY}/product-copy-service"
+          docker build -t "${IMAGE}:${IMAGE_TAG}" -t "${IMAGE}:latest" .
+          docker push "${IMAGE}:${IMAGE_TAG}"
+          docker push "${IMAGE}:latest"
+
+      - name: Ubuntu EC2 배포
+        uses: appleboy/ssh-action@v1
+        env:
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+          IMAGE_TAG: ${{ github.sha }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: ECR_REGISTRY,IMAGE_TAG
+          script: |
+            set -eu
+            IMAGE="${ECR_REGISTRY}/product-copy-service:${IMAGE_TAG}"
+            /snap/bin/aws ecr get-login-password --region ap-northeast-2 | sudo docker login --username AWS --password-stdin "${ECR_REGISTRY}"
+            sudo docker pull "$IMAGE"
+            if sudo docker container inspect product-copy-service >/dev/null 2>&1; then
+              sudo docker stop product-copy-service
+              sudo docker rm product-copy-service
+            fi
+            sudo docker run -d --name product-copy-service --restart=always -p 80:8000 -e APP_ENV=production "$IMAGE"
+            curl --fail --silent --show-error --retry 12 --retry-delay 5 --retry-connrefused --max-time 5 http://127.0.0.1/health
