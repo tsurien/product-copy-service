@@ -83,4 +83,7 @@ jobs:
               sudo docker rm product-copy-service
             fi
             sudo docker run -d --name product-copy-service --restart=always -p 80:8000 -e APP_ENV=production "$IMAGE"
-            curl --fail --silent --show-error --retry 12 --retry-delay 5 --retry-connrefused --max-time 5 http://127.0.0.1/health
+            if ! curl --fail --silent --show-error --retry 12 --retry-delay 5 --retry-all-errors --retry-max-time 60 --max-time 5 http://127.0.0.1/health; then
+              sudo docker logs --tail 80 product-copy-service
+              exit 1
+            fi
